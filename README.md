@@ -16,12 +16,12 @@ Aplicación estática para imprimir los campos variables sobre remitos físicos 
 2. Elegir un cliente y un transportista, o escribir los datos manualmente.
 3. Escribir el detalle.
 4. Pulsar **Imprimir campos**.
-5. En el diálogo de impresión usar el papel personalizado de **170 mm × 200 mm**, orientación vertical, escala 100 %, sin márgenes y sin encabezados/pies de página.
+5. En el diálogo de impresión usar el papel personalizado de **166 mm × 195 mm**, orientación vertical, escala 100 %, sin márgenes y sin encabezados/pies de página.
 6. Completar a mano los demás datos del remito.
 
 ## Primera calibración
 
-1. Medir un remito real con regla al milímetro y reemplazar el tamaño provisional (170 × 200 mm) si fuese necesario.
+1. Hacer una impresión de prueba y ajustar la calibración horizontal o vertical sólo si fuese necesario.
 2. Imprimir una prueba en hoja común usando el tamaño configurado en la impresora.
 3. Superponer esa prueba sobre un remito contra una luz.
 4. Si el texto queda corrido, cambiar los milímetros Horizontal/Vertical en la app y repetir. Esos valores quedan guardados para la próxima vez.

@@ -1,4 +1,4 @@
-import { Building2, CalendarDays, CircleCheck, Eraser, FileText, Info, Maximize2, Plus, Printer, Save, Settings2, Trash2, Truck, X } from 'lucide-react'
+import { Building2, CalendarDays, CircleCheck, ClipboardPaste, Eraser, FileText, Info, Maximize2, Printer, Save, Settings2, Truck, X } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { DayPicker } from 'react-day-picker'
 import 'react-day-picker/style.css'
@@ -11,12 +11,6 @@ type Contact = {
   cuit: string
 }
 
-type RemitoItem = {
-  id: string
-  quantity: string
-  description: string
-}
-
 type RemitoData = {
   customerName: string
   customerAddress: string
@@ -25,20 +19,33 @@ type RemitoData = {
   transporterAddress: string
   transporterCuit: string
   remitoDate: string
-  items: RemitoItem[]
+  detailTableText: string
   offsetX: number
   offsetY: number
 }
 
-type StoredRemito = Partial<RemitoData> & { detail?: string }
+type StoredRemito = Partial<RemitoData> & {
+  detail?: string
+  items?: Array<{ quantity?: string; description?: string }>
+}
+
+type DeliveryRow = {
+  number: string
+  socialReason: string
+  deliveredAt: string
+  desc4: string
+  desc7: string
+}
+
+type DeliveryTableData = {
+  rows: DeliveryRow[]
+  total4: string
+  total7: string
+}
 
 const storageKey = 'bluesphere-remitos-v1'
 const remitoWidthMm = 166
 const remitoHeightMm = 195
-
-const createItem = (description = ''): RemitoItem => ({ id: crypto.randomUUID(), quantity: '', description })
-
-const createDefaultItems = () => [createItem('Descartadores 4 litros'), createItem('Descartadores 7 litros')]
 
 const createEmptyRemito = (): RemitoData => ({
   customerName: '',
@@ -48,7 +55,7 @@ const createEmptyRemito = (): RemitoData => ({
   transporterAddress: '',
   transporterCuit: '',
   remitoDate: '',
-  items: createDefaultItems(),
+  detailTableText: '',
   offsetX: 0,
   offsetY: 0,
 })
@@ -64,13 +71,12 @@ function readStored<T>(key: string, fallback: T): T {
 
 function readInitialRemito(): RemitoData {
   const stored = readStored<StoredRemito>(`${storageKey}-draft`, {})
-  const items = Array.isArray(stored.items) && stored.items.length > 0
-    ? stored.items
-    : stored.detail?.trim()
-      ? [createItem(stored.detail)]
-      : createDefaultItems()
+  const { detail, items, ...currentFields } = stored
+  const legacyDetail = detail?.trim()
+    || items?.map((item) => [item.quantity, item.description].filter(Boolean).join('\t')).filter(Boolean).join('\n')
+    || ''
 
-  return { ...createEmptyRemito(), ...stored, items }
+  return { ...createEmptyRemito(), ...currentFields, detailTableText: currentFields.detailTableText ?? legacyDetail }
 }
 
 function parseDate(value: string) {
@@ -103,14 +109,36 @@ function getDateParts(value: string) {
   ]
 }
 
-function parseQuantity(value: string) {
-  const amount = Number(value.trim().replace(',', '.'))
-  return Number.isFinite(amount) && amount > 0 ? amount : 0
-}
+function parseDeliveryTable(value: string): DeliveryTableData {
+  const parsed: DeliveryTableData = { rows: [], total4: '', total7: '' }
 
-function formatQuantity(value: string) {
-  const amount = parseQuantity(value)
-  return amount ? new Intl.NumberFormat('es-AR', { maximumFractionDigits: 2 }).format(amount) : ''
+  for (const line of value.replace(/\r/g, '').split('\n')) {
+    const columns = line.split('\t').map((column) => column.trim())
+    if (columns.every((column) => !column)) continue
+
+    const normalizedLine = columns.join(' ').toLocaleUpperCase('es-AR')
+    if (normalizedLine.includes('TOTAL ENTREGADO')) {
+      parsed.total4 = columns.at(-2) ?? ''
+      parsed.total7 = columns.at(-1) ?? ''
+      continue
+    }
+
+    const firstColumn = columns[0]?.replace(/[.°º]/g, '').toLocaleUpperCase('es-AR')
+    const secondColumn = columns[1]?.toLocaleUpperCase('es-AR') ?? ''
+    const isHeader = ['N', 'NO', 'NRO', 'NUMERO'].includes(firstColumn)
+      && (secondColumn.includes('LUGAR') || secondColumn.includes('RAZON'))
+    if (isHeader || columns.length < 5) continue
+
+    parsed.rows.push({
+      number: columns[0] ?? '',
+      socialReason: columns[1] ?? '',
+      deliveredAt: columns[2] ?? '',
+      desc4: columns.at(-2) ?? '',
+      desc7: columns.at(-1) ?? '',
+    })
+  }
+
+  return parsed
 }
 
 function App() {
@@ -138,20 +166,6 @@ function App() {
     setRemito((current) => ({ ...current, [key]: value }))
   }
 
-  const updateItem = (id: string, key: 'quantity' | 'description', value: string) => {
-    setRemito((current) => ({
-      ...current,
-      items: current.items.map((item) => item.id === id ? { ...item, [key]: value } : item),
-    }))
-  }
-
-  const addItem = () => setRemito((current) => ({ ...current, items: [...current.items, createItem()] }))
-
-  const removeItem = (id: string) => setRemito((current) => ({
-    ...current,
-    items: current.items.filter((item) => item.id !== id),
-  }))
-
   const clearCustomer = () => {
     setCustomerId('')
     setRemito((current) => ({ ...current, customerName: '', customerAddress: '', customerCuit: '' }))
@@ -162,7 +176,7 @@ function App() {
     setRemito((current) => ({ ...current, transporterName: '', transporterAddress: '', transporterCuit: '' }))
   }
 
-  const clearDetail = () => setRemito((current) => ({ ...current, items: createDefaultItems() }))
+  const clearDetail = () => update('detailTableText', '')
 
   const loadCustomer = (id: string) => {
     setCustomerId(id)
@@ -215,8 +229,7 @@ function App() {
     window.setTimeout(() => window.print(), 100)
   }
 
-  const printableItems = remito.items.filter((item) => parseQuantity(item.quantity) > 0 && item.description.trim())
-  const totalQuantity = printableItems.reduce((total, item) => total + parseQuantity(item.quantity), 0)
+  const deliveryTable = parseDeliveryTable(remito.detailTableText)
 
   return (
     <>
@@ -316,16 +329,23 @@ function App() {
 
             <div className="form-group form-group-accent">
               <div className="form-title"><FileText size={19} /><h3>Detalle</h3><button className="btn-secondary section-clear" type="button" onClick={clearDetail}><Eraser size={14} /> Limpiar</button></div>
-              <p className="helper detail-intro">Cada renglón se imprime con la cantidad en su propia columna. Dejá vacía una cantidad para no imprimirla.</p>
-              <div className="detail-lines" role="list" aria-label="Renglones del detalle">
-                {remito.items.map((item) => <div className="detail-line" role="listitem" key={item.id}>
-                  <div><label htmlFor={`quantity-${item.id}`}>Cantidad</label><input id={`quantity-${item.id}`} value={item.quantity} onChange={(event) => updateItem(item.id, 'quantity', event.target.value)} inputMode="decimal" placeholder="0" /></div>
-                  <div><label htmlFor={`description-${item.id}`}>Producto</label><input id={`description-${item.id}`} value={item.description} onChange={(event) => updateItem(item.id, 'description', event.target.value)} placeholder="Descripción del producto" /></div>
-                  <button className="icon-button" type="button" onClick={() => removeItem(item.id)} aria-label={`Eliminar ${item.description || 'renglón'}`}><Trash2 size={17} /></button>
-                </div>)}
+              <p className="helper detail-intro">Copiá la tabla completa de Excel y pegala acá, incluyendo los títulos y la fila de TOTAL ENTREGADO.</p>
+              <label htmlFor="detail-table">Tabla de entregas</label>
+              <textarea
+                id="detail-table"
+                className="detail-paste"
+                value={remito.detailTableText}
+                onChange={(event) => update('detailTableText', event.target.value)}
+                placeholder={'N°\tLUGAR\tENTREGADO EN:\t\tDesc. 4 lts\tDesc. 7 lts\n5\tHospital…\tDirección…\t1700\t632\t478'}
+                rows={12}
+                spellCheck={false}
+              />
+              <div className={`paste-status${deliveryTable.rows.length ? ' has-data' : ''}`} aria-live="polite">
+                <ClipboardPaste size={18} />
+                <span>{deliveryTable.rows.length
+                  ? <><strong>{deliveryTable.rows.length} entregas detectadas.</strong> Se tomarán las dos últimas columnas y se ignorará la columna intermedia sin título.</>
+                  : 'Todavía no hay filas pegadas desde Excel.'}</span>
               </div>
-              <button className="btn-secondary small-button" type="button" onClick={addItem}><Plus size={16} /> Agregar otro producto</button>
-              <p className="detail-total">Total a entregar: <strong>{new Intl.NumberFormat('es-AR', { maximumFractionDigits: 2 }).format(totalQuantity)}</strong></p>
             </div>
 
             <div className="calibration-panel">
@@ -369,7 +389,6 @@ function RemitoFields({ remito, withReference = false }: { remito: RemitoData; w
       ? `translate(${(remito.offsetX / remitoWidthMm) * 100}%, ${(remito.offsetY / remitoHeightMm) * 100}%)`
       : `translate(${remito.offsetX}mm, ${remito.offsetY}mm)`,
   }
-  const printableItems = remito.items.filter((item) => parseQuantity(item.quantity) > 0 && item.description.trim())
   const [dateDay, dateMonth, dateYear] = getDateParts(remito.remitoDate)
   return (
     <div className={`remito-sheet${withReference ? ' with-reference' : ''}`}>
@@ -384,14 +403,35 @@ function RemitoFields({ remito, withReference = false }: { remito: RemitoData; w
         <span className="print-field transporter-name">{remito.transporterName}</span>
         <span className="print-field transporter-address">{remito.transporterAddress}</span>
         <span className="print-field transporter-cuit">{remito.transporterCuit}</span>
-        <div className="print-field detail-rows">
-          {printableItems.map((item) => <div className="detail-print-row" key={item.id}>
-            <span className="detail-print-quantity">{formatQuantity(item.quantity)}</span>
-            <span className="detail-print-description">{item.description}</span>
-          </div>)}
-        </div>
+        <DeliveryTable value={remito.detailTableText} />
       </div>
     </div>
+  )
+}
+
+function DeliveryTable({ value }: { value: string }) {
+  const table = parseDeliveryTable(value)
+  if (!table.rows.length && !table.total4 && !table.total7) return null
+
+  return (
+    <table className={`print-field pasted-detail-table${table.rows.length > 10 ? ' is-compact' : ''}`} aria-label="Tabla de entregas">
+      <colgroup><col /><col /><col /><col /><col /></colgroup>
+      <thead><tr><th scope="col">N°</th><th scope="col">RAZÓN SOCIAL</th><th scope="col">ENTREGADO EN:</th><th scope="col">Desc. 4 lts</th><th scope="col">Desc. 7 lts</th></tr></thead>
+      <tbody>
+        {table.rows.map((row, index) => <tr key={`${row.number}-${index}`}>
+          <td className="table-number"><span>{row.number}</span></td>
+          <td><span>{row.socialReason}</span></td>
+          <td><span>{row.deliveredAt}</span></td>
+          <td className="table-number"><span>{row.desc4}</span></td>
+          <td className="table-number"><span>{row.desc7}</span></td>
+        </tr>)}
+        {(table.total4 || table.total7) && <tr className="delivery-total-row">
+          <th scope="row" colSpan={3}>TOTAL ENTREGADO</th>
+          <td className="table-number"><span>{table.total4}</span></td>
+          <td className="table-number"><span>{table.total7}</span></td>
+        </tr>}
+      </tbody>
+    </table>
   )
 }
 
